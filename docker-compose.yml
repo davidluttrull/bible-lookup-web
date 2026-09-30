@@ -1,0 +1,15 @@
+services:
+  bible-lookup:
+    build: .
+    image: bible-lookup:latest
+    container_name: bible-lookup
+    restart: unless-stopped
+    ports:
+      - "8321:8321"          # change the left number to use a different port on the server
+    volumes:
+      - ./config:/config     # config.json: API keys and API.Bible translation IDs
+    # Keys can also come from the environment instead of config.json:
+    # environment:
+    #   ESV_API_KEY: ""
+    #   NLT_API_KEY: ""
+    #   API_BIBLE_KEY: ""

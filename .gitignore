@@ -1,0 +1,9 @@
+.DS_Store
+__pycache__/
+
+# API keys (copy config.example.json to config.json, or let server.py create it)
+config.json
+config/
+
+# Docker bundles made for a server hold a copy of config.json: never commit them
+*.tar.gz

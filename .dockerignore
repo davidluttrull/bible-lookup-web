@@ -1,0 +1,10 @@
+# keep secrets and build-only files out of the image
+config.json
+config/
+data/raw/
+tests/
+tools/
+**/__pycache__/
+*.md
+.DS_Store
+bible-lookup-docker.tar.gz
