@@ -154,7 +154,8 @@ body.home .go { width: 46px; height: 46px; }
 }
 .passage .heading:first-child { margin-top: 0; }
 .passage .title { font-style: italic; color: var(--muted); font-size: .92em; margin: 0 0 .4em; clear: both; white-space: pre-line; }
-.vn { color: var(--vn); font-size: .62em; font-weight: 700; vertical-align: super; line-height: 0; margin-right: .2em; }
+.vn { color: var(--vn); font-size: .62em; font-weight: 700; vertical-align: super; line-height: 0; }
+.ch-sp { font-size: 1px; }  /* copied as a space after the chapter number, invisible on screen */
 .wj { color: var(--wj); }
 .nd { font-variant: small-caps; }
 .hl { background: var(--hl); border-radius: 3px; box-shadow: 0 0 0 2px var(--hl); }
