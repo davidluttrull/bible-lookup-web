@@ -11,7 +11,7 @@ WORKDIR /app
 RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin app \
     && mkdir /config && chown app /config
 
-COPY server.py providers.py bibleref.py ./
+COPY server.py providers.py bibleref.py passage_cache.py ./
 COPY static/ static/
 COPY data/kjv.json data/asv.json data/
 

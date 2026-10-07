@@ -6,6 +6,8 @@ const CHEV = '<svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="
 
 let CONFIG = null;
 let T_BY_ID = {};
+let RENDER_ID = 0;       // bumps on every navigation; stale page loads are dropped
+let CHAPTER_NAV = null;  // {prev, next} URLs for the arrow keys on single-passage pages
 
 function store(key, value) {
   try {
@@ -81,10 +83,23 @@ function initHeader() {
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) {
+    const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+    if (e.key === "/" && !typing) {
       e.preventDefault();
       $("#q").focus();
       $("#q").select();
+      return;
+    }
+    // ← / → : previous / next chapter (Cmd+← etc. are left to the browser)
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !typing && CHAPTER_NAV && !$(".pop")
+        && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      const url = e.key === "ArrowLeft" ? CHAPTER_NAV.prev : CHAPTER_NAV.next;
+      if (!url) return;
+      e.preventDefault();
+      CHAPTER_NAV = null;  // one chapter per press, even while the next page loads
+      history.pushState(null, "", url);
+      render();
+      window.scrollTo(0, 0);
     }
   });
 }
@@ -98,7 +113,7 @@ function versesHTML(verses, { hl } = {}) {
   let open = false;
   const close = () => { if (open) { out += "</p>"; open = false; } };
   verses.forEach((v, i) => {
-    if (v.s) { close(); out += v.s.split("\n").map((s) => `<h3 class="heading">${esc(s)}</h3>`).join(""); }
+    if (v.s) { close(); out += `<h3 class="heading">${esc(v.s)}</h3>`; }
     if (v.t) { close(); out += `<p class="title">${esc(v.t)}</p>`; }
     if (!open || v.p || v.v === 1) { close(); out += "<p>"; open = true; }
     const mark = h1 && v.v >= h1 && v.v <= h2 ? " hl" : "";
@@ -123,7 +138,7 @@ function unavailableHTML(res, tname) {
 /* ------------------------------------------------------------------ views */
 
 // One passage section: toolbar (reference + translation), text, and links.
-function blockHTML(res, tid, { hl } = {}) {
+function blockHTML(res, tid, { hl, afterToolbar = "" } = {}) {
   const t = T_BY_ID[tid];
   const ref = res.ref;
   const toolbar = `<div class="toolbar">
@@ -154,7 +169,7 @@ function blockHTML(res, tid, { hl } = {}) {
   }
   links.push(`<a href="${urlFor({ q: ref.query, all: true })}" data-nav>${esc(ref.display)} in all English translations</a>`);
 
-  return toolbar + body + (res.verses || res.unavailable ? `<div class="links">${links.join("")}</div>` : "");
+  return toolbar + afterToolbar + body + (res.verses || res.unavailable ? `<div class="links">${links.join("")}</div>` : "");
 }
 
 // Wire up a section's dropdowns. Changing the translation re-runs the whole query.
@@ -185,10 +200,12 @@ function metaHTML(results) {
 }
 
 async function renderPassage(q, tid, hl) {
-  if (q.includes(";")) return renderMulti(q, tid);
+  if (/[;,]/.test(q)) return renderMulti(q, tid);
   const main = $("#main");
+  const id = RENDER_ID;
   main.innerHTML = `<div class="skel"></div><div class="skel"></div><div class="skel s2"></div>`;
   const res = await api(`/api/passage?q=${encodeURIComponent(q)}&t=${tid}`);
+  if (id !== RENDER_ID) return;  // the reader has already moved on
   if (!res.ref) {
     main.innerHTML = `<p class="error">${esc(res.error)}</p>`;
     $("#q").value = q;
@@ -199,15 +216,18 @@ async function renderPassage(q, tid, hl) {
   $("#q").value = ref.display.replace("–", "-");
   document.title = `${ref.display} (${tid}) – Bible Lookup`;
 
-  let chapnav = "";
-  if (ref.isChapter) {
-    chapnav = `<nav class="chapnav">
-      ${ref.prev ? `<a href="${urlFor({ q: ref.prev, t: tid })}" data-nav>← ${esc(ref.prev)}</a>` : "<span></span>"}
-      ${ref.next ? `<a href="${urlFor({ q: ref.next, t: tid })}" data-nav>${esc(ref.next)} →</a>` : "<span></span>"}
-    </nav>`;
-  }
+  const prevUrl = ref.prev ? urlFor({ q: ref.prev, t: tid }) : null;
+  const nextUrl = ref.next ? urlFor({ q: ref.next, t: tid }) : null;
+  CHAPTER_NAV = { prev: prevUrl, next: nextUrl };
 
-  main.innerHTML = `<section class="block">${blockHTML(res, tid, { hl })}</section>` + chapnav + metaHTML([res]);
+  // previous / next chapter buttons, shown above and below the text on chapter pages
+  const chapnav = (where) => !ref.isChapter ? "" : `<nav class="chapnav ${where}" aria-label="Chapter navigation">
+      ${prevUrl ? `<a href="${prevUrl}" data-nav title="Previous chapter (← key)" aria-keyshortcuts="ArrowLeft">← ${esc(ref.prev)}</a>` : "<span></span>"}
+      ${nextUrl ? `<a href="${nextUrl}" data-nav title="Next chapter (→ key)" aria-keyshortcuts="ArrowRight">${esc(ref.next)} →</a>` : "<span></span>"}
+    </nav>`;
+
+  main.innerHTML = `<section class="block">${blockHTML(res, tid, { hl, afterToolbar: chapnav("top") })}</section>`
+    + chapnav("bottom") + metaHTML([res]);
   bindBlock(main.querySelector(".block"), res, tid, ref.query, hl);
 
   if (hl) {
@@ -216,7 +236,7 @@ async function renderPassage(q, tid, hl) {
   }
 }
 
-// Several passages separated by semicolons: "James 1:5; John 3:16-18".
+// Several passages separated by semicolons or commas: "James 1:5; John 3:16-18, 21".
 async function renderMulti(q, tid) {
   const main = $("#main");
   main.innerHTML = `<div class="skel"></div><div class="skel"></div><div class="skel s2"></div>`;
@@ -349,9 +369,12 @@ document.addEventListener("click", (e) => {
 /* ------------------------------------------------------------------ router */
 
 function render() {
+  RENDER_ID++;
+  CHAPTER_NAV = null;
   closePicker();
   const p = new URLSearchParams(location.search);
-  const q = p.get("q");
+  // stray separators at either end ("Isa. 53:6,") would turn one passage into a list
+  const q = (p.get("q") || "").replace(/^[\s,;]+|[\s,;]+$/g, "");
   const tid = currentTranslation();
   setHeaderTranslation(tid);
   const home = !q;

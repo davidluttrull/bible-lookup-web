@@ -148,8 +148,11 @@ body.home .go { width: 46px; height: 46px; }
   float: left; font-size: 3.1em; line-height: .9; font-weight: 700;
   margin: .06em .18em 0 0; font-family: var(--serif); color: var(--text);
 }
-.passage .heading { font-size: 1em; line-height: 1.4; font-weight: 700; margin: 1.4em 0 .45em; clear: both; }
-.passage .heading:first-child, .passage .heading + .heading { margin-top: 0; }
+.passage .heading {
+  font-family: var(--sans, inherit); font-size: .95em; font-weight: 700; line-height: 1.35;
+  color: var(--text); margin: 1.1em 0 .45em; clear: both; white-space: pre-line;
+}
+.passage .heading:first-child { margin-top: 0; }
 .passage .title { font-style: italic; color: var(--muted); font-size: .92em; margin: 0 0 .4em; clear: both; white-space: pre-line; }
 .vn { color: var(--vn); font-size: .62em; font-weight: 700; vertical-align: super; line-height: 0; margin-right: .2em; }
 .wj { color: var(--wj); }
@@ -160,6 +163,7 @@ body.home .go { width: 46px; height: 46px; }
 .links { display: flex; flex-direction: column; gap: 4px; margin: 18px 0 0; font-size: 16px; }
 
 .chapnav { display: flex; justify-content: space-between; margin-top: 28px; gap: 12px; }
+.chapnav.top { margin: -6px 0 24px; }
 .chapnav a {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; color: var(--text);
@@ -193,8 +197,6 @@ body.home .go { width: 46px; height: 46px; }
 .cmp-head span { color: var(--muted); font-size: 14px; }
 .cmp .passage { font-size: 17px; }
 .cmp .passage p { margin-bottom: .3em; }
-.cmp .passage .heading { font-size: .92em; margin: .9em 0 .3em; }
-.cmp .passage .heading:first-child { margin-top: 0; }
 .cmp .off { color: var(--faint); font-size: 14px; }
 .cmp .off a { margin-left: 10px; }
 

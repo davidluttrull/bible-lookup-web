@@ -21,15 +21,18 @@ import sys
 import threading
 import urllib.parse
 import uuid
-from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import providers
+from passage_cache import PassageCache
 from bibleref import Bible, RefError
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(ROOT, "static")
 CONFIG_PATH = os.environ.get("BIBLE_LOOKUP_CONFIG") or os.path.join(ROOT, "config.json")
+# cached passages from the online translations, next to config.json by default
+CACHE_PATH = (os.environ.get("BIBLE_LOOKUP_CACHE")
+              or os.path.join(os.path.dirname(os.path.abspath(CONFIG_PATH)), "cache.db"))
 ENV_KEYS = {"esv_api_key": "ESV_API_KEY", "nlt_api_key": "NLT_API_KEY", "api_bible_key": "API_BIBLE_KEY"}
 
 # Order here is the order in the translation picker.
@@ -117,8 +120,7 @@ class App:
                 entry = cfg.get("api_bible", {}).get(tid) or {}
                 t["provider"] = providers.APIBible(cfg.get("api_bible_key"), entry.get("id"))
             self.translations[tid] = t
-        self.cache = OrderedDict()
-        self.lock = threading.Lock()
+        self.cache = PassageCache(CACHE_PATH, max_age_days=cfg.get("cache_days", 0))
         # anonymous ids for API.Bible's fair-use view reports
         if not cfg.get("fums_device_id"):
             cfg["fums_device_id"] = uuid.uuid4().hex
@@ -175,23 +177,20 @@ class App:
         ok, reason = t["provider"].available()
         if not ok:
             return 200, {**base, "unavailable": reason}
-        key = (t["id"], ref)
-        with self.lock:
-            if key in self.cache:
-                self.cache.move_to_end(key)
-                result, tokens = self.cache[key]
-                self.report_views(tokens)
-                return 200, result
+        local = t["id"] in BUNDLED  # read from disk already; no need to cache
+        hit = None if local else self.cache.get(t["id"], ref)
+        if hit:
+            result, tokens = hit
+            self.report_views(tokens)  # API.Bible counts every view, cached or not
+            return 200, result
         try:
             verses = t["provider"].fetch(ref)
         except providers.ProviderError as e:
             return 502, {**base, "error": str(e)}
         result = {**base, "verses": verses, "copyright": t["provider"].copyright,
                   "source": t["provider"].source}
-        with self.lock:
-            self.cache[key] = (result, verses.fums)
-            while len(self.cache) > 500:
-                self.cache.popitem(last=False)
+        if not local:
+            self.cache.put(t["id"], ref, result, verses.fums)
         self.report_views(verses.fums)
         return 200, result
 

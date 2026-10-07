@@ -2,7 +2,7 @@
 
 Every provider turns a Ref into a list of verse dicts:
     {"c": 3, "v": 16, "h": "<trusted html>", "p": True,
-     "s": "optional section heading", "t": "optional title (psalm title, speaker, note)"}
+     "s": "optional section heading", "t": "optional title (psalm title, speaker...)"}
 Verse html only ever contains <i>, <br>, and <span class="nd|wj"> that we build
 ourselves; all source text is escaped first.
 """
@@ -85,6 +85,7 @@ class _VerseHTML(HTMLParser):
       open_span(o, c)      inline markup we keep (red letters, small caps, italics)
       plain_span()         inline markup we ignore (keeps open/close tags paired)
       text(data)           text content
+      start_title(heading=True)  a section heading (vs. a psalm-style title)
     Text at the start of a block is held back until we know whether it continues the
     current verse (then it goes on a new line) or leads into the next verse number
     (like the "[[" before Mark 16:9).
@@ -99,8 +100,9 @@ class _VerseHTML(HTMLParser):
         self.skip = 0            # depth inside an element we drop
         self.in_num = False      # inside the verse-number element
         self.title = None        # collecting a title (psalm title, speaker, note)
-        self.title_kind = "t"    # ...or a section heading ("s")
-        self.pending_titles = {}  # kind -> text, attached to the next verse
+        self.pending_title = None
+        self.title_is_heading = False
+        self.pending_heading = None
         self.block_start = False
         self.pending = ""
         self.closers = []        # one entry per open span
@@ -123,8 +125,13 @@ class _VerseHTML(HTMLParser):
 
     def start_verse(self, c, v):
         prefix = self.pending.strip()
-        self.cur = {"c": c, "v": v, "h": "", "p": self.block_start, **self.pending_titles}
-        self.pending_titles = {}
+        self.cur = {"c": c, "v": v, "h": "", "p": self.block_start}
+        if self.pending_heading:
+            self.cur["s"] = self.pending_heading
+            self.pending_heading = None
+        if self.pending_title:
+            self.cur["t"] = self.pending_title
+            self.pending_title = None
         self.verses.append(self.cur)
         if prefix:
             self._add(prefix)
@@ -132,19 +139,20 @@ class _VerseHTML(HTMLParser):
         self.block_start = False
         self.in_num = True
 
-    def start_title(self, kind="t"):
+    def start_title(self, heading=False):
         self.title = ""
-        self.title_kind = kind
+        self.title_is_heading = heading
 
     def end_title(self):
         if self.title is not None and self.title.strip():
             text = re.sub(r"\s+", " ", self.title).strip()
-            # the Psalms' book divisions ("BOOK 2") go above the section heading
-            kind = "s" if re.fullmatch(r"book [\divxlc]+\.?", text, re.I) else self.title_kind
-            # several before one verse stack up
-            prev = self.pending_titles.get(kind)
-            self.pending_titles[kind] = f"{prev}\n{text}" if prev else text
+            # several before one verse ("BOOK 2", then the psalm title) stack up
+            if self.title_is_heading:
+                self.pending_heading = f"{self.pending_heading}\n{text}" if self.pending_heading else text
+            else:
+                self.pending_title = f"{self.pending_title}\n{text}" if self.pending_title else text
         self.title = None
+        self.title_is_heading = False
 
     def open_span(self, open_html, close_html):
         if self.cur is None or self.title is not None:
@@ -218,7 +226,7 @@ class _ESVParser(_VerseHTML):
     Verse markers look like <b class="verse-num" id="v43003016-1"> (book, chapter,
     verse packed into the id). Section headings (h3) become the next verse's
     heading; psalm titles, Psalm 119 letters, Song of Songs speakers and textual
-    notes (h4) become its title. Other h4s are dropped.
+    notes (h4) become its title.
     """
 
     TITLE_CLASSES = {"psalm-title", "psalm-acrostic-title", "textual-note", "speaker"}
@@ -233,7 +241,7 @@ class _ESVParser(_VerseHTML):
         if tag == "h4" and not self.TITLE_CLASSES & set(cls):
             self.skip = 1
         elif tag == "h3":
-            self.start_title("s")
+            self.start_title(heading=True)
         elif tag == "h4":
             self.start_title()
         elif tag == "b" and ("verse-num" in cls or "chapter-num" in cls):
@@ -284,15 +292,20 @@ class ESV:
         return True, None
 
     def fetch(self, ref):
+        q = ref.query()
+        if ref.is_chapter and ref.book.chapters == 1:
+            # the ESV API reads "Jude 1" as Jude 1:1 in one-chapter books; ask for every
+            # verse (one past the KJV count, for 3 John 1:15; the API stops at the last)
+            q = f"{ref.book.name} 1:1-{ref.book.verse_counts[0] + 1}"
         params = {
-            "q": ref.query(),
+            "q": q,
             "include-passage-references": "false",
             "include-verse-numbers": "true",
             "include-first-verse-numbers": "true",
             "include-chapter-numbers": "true",
             "include-footnotes": "false",
             "include-footnote-body": "false",
-            "include-headings": "true",       # section headings and psalm titles
+            "include-headings": "true",       # section headings (h3) and psalm titles (h4)
             "include-subheadings": "true",
             "include-short-copyright": "false",
             "include-copyright": "false",
@@ -314,8 +327,10 @@ class ESV:
 
 
 class _NLTParser(HTMLParser):
-    """Pull verses out of the NLT API's HTML, skipping footnotes and headings other
-    than section headings (<h3|h4 class="subhead">, found inside the verse they introduce).
+    """Pull verses out of the NLT API's HTML, skipping footnotes.
+
+    Section headings (<h3 class="subhead">) sit inside the verse they come before
+    and become its heading; other headings (book/chapter labels) are dropped.
     """
 
     SKIP_TAGS = {"h1", "h2", "h3", "h4", "h5"}
@@ -328,8 +343,8 @@ class _NLTParser(HTMLParser):
         self.stack = []        # open tags inside the current verse: (tag, emitted_close)
         self.title = None
         self.in_title = False
-        self.heading = None    # text of the section heading being read
-        self.heading_note = None  # skip depth of a footnote inside it
+        self.hdepth = 0        # depth inside a section heading we're collecting
+        self.htext = ""
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -343,13 +358,15 @@ class _NLTParser(HTMLParser):
             return
         if self.skip:
             self.skip += 1 if tag not in ("br",) else 0
-            if self.heading is not None and self.heading_note is None and (tag == "a" or cls in ("tn", "a-tn")):
-                self.heading_note = self.skip
+            return
+        if self.hdepth:
+            self.hdepth += 1 if tag != "br" else 0
+            return
+        if tag in ("h3", "h4") and "subhead" in cls.split():
+            self.hdepth, self.htext = 1, ""
             return
         if tag in self.SKIP_TAGS or cls in ("vn", "tn", "a-tn") or tag == "a":
             self.skip = 1
-            if tag in self.SKIP_TAGS and "subhead" in cls.split():
-                self.heading = ""
             return
         if tag == "p":
             if "psa-title" in cls:
@@ -384,15 +401,13 @@ class _NLTParser(HTMLParser):
             self.cur = None
             return
         if self.skip:
-            if self.heading_note == self.skip:
-                self.heading_note = None
             self.skip -= 1
-            if not self.skip and self.heading is not None:
-                text = re.sub(r"\s+", " ", self.heading).strip()
-                if text:
-                    prev = self.cur.get("s")
-                    self.cur["s"] = f"{prev}\n{text}" if prev else text
-                self.heading = None
+            return
+        if self.hdepth:
+            self.hdepth -= 1
+            text = re.sub(r"\s+", " ", self.htext).strip()
+            if not self.hdepth and text:
+                self.cur["s"] = f"{self.cur['s']}\n{text}" if self.cur.get("s") else text
             return
         if self.stack:
             t, close = self.stack.pop()
@@ -403,11 +418,10 @@ class _NLTParser(HTMLParser):
                     self.cur["t"] = self.title.strip()
 
     def handle_data(self, data):
-        if self.cur is None:
+        if self.cur is None or self.skip:
             return
-        if self.skip:
-            if self.heading is not None and self.heading_note is None:
-                self.heading += data
+        if self.hdepth:
+            self.htext += data
             return
         if self.in_title:
             self.title += data
@@ -473,31 +487,30 @@ class _USXParser(_VerseHTML):
       <p class="p|m|q1|q2|...">                       paragraphs and poetry lines
       <p class="d|qa|sp|iex">                         psalm title, acrostic letter,
                                                       speaker, textual note -> title
-      <p class="s|s1|s2...">                          section headings -> heading
-                                                      (CSB's Psalm 119 letters are s2
-                                                      headings holding a qac span;
-                                                      those become titles)
-      <p class="ms">                                  major heading -> heading (in the
-                                                      Psalms: book divisions and NASB
-                                                      psalm titles -> title)
-      <p class="r|cl...">                             other headings (dropped)
+      <p class="s1|s2|s3">                            section headings -> heading
+                                                      (except CSB's Psalm 119 letters,
+                                                      s2 headings holding a qac span,
+                                                      which become titles)
+      <p class="r|mr|sr|cl|mt...">                    other headings (dropped)
       <span class="wj|nd|sc|add|it|qs">               red letters, LORD, italics
     NASB puts psalm titles in "ms" blocks (next to "PSALM 23" labels, which are
-    dropped) and marks LORD as L<span class="sc">ord</span>.
+    dropped) and marks LORD as L<span class="sc">ord</span>. Outside the Psalms,
+    "ms" is a major section heading (CSB's "The Sermon on the Mount").
     Some texts carry junk from their print sources (CSB: "¥¥¥" dividers, "#" around
     dashes, stray commas in <span class="sup">); those are removed.
     """
 
     TITLE_BLOCKS = {"d", "qa", "sp", "iex"}
+    HEADING = re.compile(r"(s|ms|mt|imt|is)\d*$|r$|mr$|sr$|cl$|cd$|sd\d*$")
     SECTION = re.compile(r"s\d*$")
-    HEADING = re.compile(r"(ms|mt|imt|is)\d*$|r$|mr$|sr$|cl$|cd$|sd\d*$")
     ITALIC = {"add", "it", "qs", "em", "bdit"}
 
-    def __init__(self, psalms=False):
+    def __init__(self, ms_is_heading=False):
         super().__init__()
-        self.psalms = psalms
+        self.ms_is_heading = ms_is_heading
         self.heading = False      # inside a heading block
-        self.heading_keep = False # ...that we keep (a section heading, psalm title or acrostic letter)
+        self.heading_keep = False # ...that holds an acrostic letter, so keep it as a title
+        self.block_ms = False     # ...that is an "ms" block
         self.kinds = []           # kind of each open span: "num", "nd" or "other"
 
     def handle_starttag(self, tag, attrs):
@@ -510,15 +523,12 @@ class _USXParser(_VerseHTML):
         if tag == "p":
             if c0 in self.TITLE_BLOCKS:
                 self.start_title()
-            elif c0 == "ms":         # CSB major headings; NASB psalm titles, "BOOK ONE"
-                self.heading, self.heading_keep = True, True
-                self.start_title("t" if self.psalms else "s")
-            elif self.SECTION.match(c0):
-                self.heading, self.heading_keep = True, True
-                self.start_title("s")
+            elif c0 == "ms":         # NASB psalm titles (and "BOOK ONE" style headings)
+                self.heading, self.heading_keep, self.block_ms = True, True, True
+                self.start_title(heading=self.ms_is_heading)
             elif self.HEADING.match(c0):
                 self.heading, self.heading_keep = True, False
-                self.start_title()
+                self.start_title(heading=bool(self.SECTION.match(c0)))
             elif c0 != "nb":        # nb = "no break": continues the paragraph
                 self.start_block()
         elif tag == "span":
@@ -534,7 +544,7 @@ class _USXParser(_VerseHTML):
             self.kinds.append("nd" if "nd" in cls or "sc" in cls else "other")
             if "qac" in cls:
                 self.heading_keep = True
-                self.title_kind = "t"   # an acrostic letter is a title, not a heading
+                self.title_is_heading = False   # acrostic letter: a title, not a heading
                 self.plain_span()
             elif "wj" in cls:
                 self.open_span('<span class="wj">', "</span>")
@@ -550,13 +560,15 @@ class _USXParser(_VerseHTML):
             self.skip -= 1
             return
         if tag == "p" and self.title is not None:
-            if self.heading and not self.heading_keep:
+            if self.heading and not self.heading_keep and not self.title_is_heading:
                 self.title = None
             elif re.fullmatch(r"\s*psalm \d+\.?\s*", self.title, re.I):
                 self.title = None   # NASB's "PSALM 23" label
             else:
+                if self.block_ms and re.match(r"\s*book\b", self.title, re.I):
+                    self.title_is_heading = True   # "BOOK 2" divides the Psalms: a heading
                 self.end_title()
-            self.heading = False
+            self.heading = self.block_ms = False
         elif tag == "span" and self.kinds:
             if self.kinds.pop() == "num":
                 self.in_num = False
@@ -588,11 +600,11 @@ class APIBible:
             return False, "Not enabled on your API.Bible account (run: python3 server.py --setup)."
         return True, None
 
-    def _get(self, path, tokens, psalms=False):
+    def _get(self, path, tokens):
         params = {
             "content-type": "html",
             "include-notes": "false",
-            "include-titles": "true",   # psalm titles etc.; section headings are dropped
+            "include-titles": "true",   # section headings, psalm titles, etc.
             "include-chapter-numbers": "false",
             "include-verse-numbers": "true",
             "include-verse-spans": "false",
@@ -603,7 +615,7 @@ class APIBible:
         data, json_meta = body["data"], body.get("meta") or {}
         if data.get("copyright"):
             self.copyright = re.sub(r"\s+", " ", data["copyright"]).strip()
-        p = _USXParser(psalms)
+        p = _USXParser(ms_is_heading=not path.split("/")[1].startswith("PSA."))
         p.feed(data.get("content", ""))
         p.close()
         tokens.append(json_meta.get("fumsToken"))
@@ -611,22 +623,21 @@ class APIBible:
 
     def fetch(self, ref):
         b = ref.book
-        psalms = b.id == "PSA"
         verses = []
         tokens = []
         if ref.is_chapter:
             for c in range(ref.c1, ref.c2 + 1):
-                verses += self._get(f"chapters/{b.id}.{c}", tokens, psalms)
+                verses += self._get(f"chapters/{b.id}.{c}", tokens)
         else:
             pid = f"{b.id}.{ref.c1}.{ref.v1}-{b.id}.{ref.c2}.{ref.v2}"
             try:
-                verses = self._get(f"passages/{pid}", tokens, psalms)
+                verses = self._get(f"passages/{pid}", tokens)
             except ProviderError:
                 if ref.v2 <= b.verse_counts[ref.c2 - 1]:
                     raise
                 # the extra-verse allowance overshot this translation; retry without it
                 pid = f"{b.id}.{ref.c1}.{ref.v1}-{b.id}.{ref.c2}.{ref.v2 - 1}"
-                verses = self._get(f"passages/{pid}", tokens, psalms)
+                verses = self._get(f"passages/{pid}", tokens)
         result = within(ref, verses)
         result.fums = tuple(t for t in tokens if t)
         return result

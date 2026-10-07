@@ -78,6 +78,24 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parts("John 3:16"), ["John 3:16"])
         self.assertEqual(parts(" ; "), [])
 
+    def test_split_commas(self):
+        def parts(s):
+            return [r.query() if not isinstance(r, RefError) else "ERR" for _, r in BIBLE.split(s)]
+        self.assertEqual(parts("Hebrews 9:23-28; 10:11-14, 18; Hebrews 7:27"),
+                         ["Hebrews 9:23-28", "Hebrews 10:11-14", "Hebrews 10:18", "Hebrews 7:27"])
+        self.assertEqual(parts("John 3:16, 18-20"), ["John 3:16", "John 3:18-20"])
+        self.assertEqual(parts("John 3:16, 4:2"), ["John 3:16", "John 4:2"])
+        self.assertEqual(parts("John 3:36-4:2, 5"), ["John 3:36-4:2", "John 4:5"])
+        self.assertEqual(parts("Ps 23, 24"), ["Psalms 23", "Psalms 24"])
+        self.assertEqual(parts("Jude 3, 5"), ["Jude 1:3", "Jude 1:5"])
+        self.assertEqual(parts("John 3:16, Rom 5:8, 6:23"), ["John 3:16", "Romans 5:8", "Romans 6:23"])
+        self.assertEqual(parts("John 3:16,, 17 ,"), ["John 3:16", "John 3:17"])
+        self.assertEqual(parts("Isa. 53:6,"), ["Isaiah 53:6"])
+        self.assertEqual(q("Isa. 53:6,"), "Isaiah 53:6")
+        self.assertEqual(q(" ;Isa 53:6 ; "), "Isaiah 53:6")
+        self.assertEqual(parts("John 3:16, 99"), ["John 3:16", "ERR"])
+        self.assertEqual(len(parts(", ".join(["John 3:16"] * 20))), 12)
+
     def test_logos(self):
         self.assertEqual(BIBLE.parse("John 3:16").logos(), "Jn3.16")
         self.assertEqual(BIBLE.parse("1 Cor 13").logos(), "1Co13")
