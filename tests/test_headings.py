@@ -73,7 +73,7 @@ class NLTTests(unittest.TestCase):
 
 class APIBibleTests(unittest.TestCase):
     def parse(self, page, psalms=False):
-        p = providers._USXParser(psalms)
+        p = providers._USXParser(ms_is_heading=not psalms)
         p.feed(page)
         p.close()
         return p.result()

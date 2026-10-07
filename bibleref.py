@@ -177,7 +177,7 @@ class Bible:
         return None
 
     def parse(self, q):
-        q = (q or "").strip()
+        q = (q or "").strip(" \t\r\n,;")  # stray separators, e.g. "Isa. 53:6,"
         if not q:
             raise RefError("Type a reference, like John 3:16.")
         m = re.match(r"^(.*?[a-zA-Z].*?)\s*(\d[\d\s:.\-‐-―]*)?$", q)
@@ -217,24 +217,33 @@ class Bible:
         """Parse "James 1:5; John 3:16-18" into [(text, Ref or RefError), ...].
 
         A part with no book name continues the previous book, so
-        "John 3:16; 4:2" means John 3:16 and John 4:2.
+        "John 3:16; 4:2" means John 3:16 and John 4:2. After a comma, a bare number
+        continues the previous chapter, as in print: "Heb 10:11-14, 18" means
+        Hebrews 10:11-14 and 10:18 (but "Ps 23, 24" is two whole psalms).
         """
         out = []
         prev = None
-        for part in [p.strip() for p in (q or "").split(";") if p.strip()][:limit]:
-            try:
-                ref = self.parse(part)
-            except RefError as e:
-                if not (prev and part[0].isdigit()):
-                    out.append((part, e))
+        for group in (q or "").split(";"):
+            for i, part in enumerate(p.strip() for p in group.split(",")):
+                if not part:
                     continue
+                if len(out) == limit:
+                    return out
                 try:
-                    ref = self.parse(f"{prev.book.name} {part}")
-                except RefError as e2:
-                    out.append((part, e2))
-                    continue
-            out.append((part, ref))
-            prev = ref
+                    ref = self.parse(part)
+                except RefError as e:
+                    if not (prev and part[0].isdigit()):
+                        out.append((part, e))
+                        continue
+                    same_chapter = i > 0 and prev.v1 is not None and not re.search(r"[:.]", part)
+                    book = prev.book.name
+                    try:
+                        ref = self.parse(f"{book} {prev.c2}:{part}" if same_chapter else f"{book} {part}")
+                    except RefError as e2:
+                        out.append((part, e2))
+                        continue
+                out.append((part, ref))
+                prev = ref
         return out
 
     def _make(self, book, c1, v1, c2, v2):
