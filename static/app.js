@@ -117,7 +117,14 @@ function versesHTML(verses, { hl } = {}) {
     if (v.t) { close(); out += `<p class="title">${esc(v.t)}</p>`; }
     if (!open || v.p || v.v === 1) { close(); out += "<p>"; open = true; }
     const mark = h1 && v.v >= h1 && v.v <= h2 ? " hl" : "";
-    const num = v.v === 1 ? `<span class="ch-num">${v.c}</span>` : `<sup class="vn">${v.v}</sup>`;
+    // Real spaces after the numbers (not just CSS margins) so plain-text copies read
+    // "16 For God…" rather than "16For God…". The verse number's space is non-breaking
+    // and sits inside the <sup>, so it's small and never strands a number at a line end.
+    // A plain space after the chapter number would be dropped next to the float, so it
+    // gets a non-breaking space shrunk to nothing (.ch-sp).
+    const num = v.v === 1
+      ? `<span class="ch-num">${v.c}</span><span class="ch-sp">&nbsp;</span>`
+      : `<sup class="vn">${v.v}&nbsp;</sup>`;
     out += `<span class="v${mark}" id="v${v.c}-${v.v}">${num}${v.h}</span> `;
   });
   close();
